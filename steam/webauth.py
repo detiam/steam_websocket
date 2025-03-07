@@ -62,7 +62,7 @@ import requests
 from steam.enums.common import EResult
 from steam.enums.proto import EAuthSessionGuardType, EAuthTokenPlatformType, ESessionPersistence
 from steam.steamid import SteamID
-from steam.utils.web import make_requests_session, generate_session_id
+from steam.utils.web import make_requests_session, generate_session_id, DEFAULT_PARAMS
 from steam.core.crypto import rsa_publickey, pkcs1v15_encrypt
 
 
@@ -71,8 +71,6 @@ API_HEADERS = {
     'Referer': 'https://steamcommunity.com/',
     'Accept': 'application/json, text/plain, */*'
 }
-
-API_URL = 'https://api.steampowered.com/{}Service/{}/v{}'
 
 SUPPORTED_AUTH_TYPES = [EAuthSessionGuardType.EmailCode, EAuthSessionGuardType.DeviceCode, EAuthSessionGuardType.DeviceConfirmation]
 
@@ -144,8 +142,9 @@ class WebAuth:
     def send_api_request(self, data, steam_api_interface, steam_api_method,
                          steam_api_version):
         """Send request to Steam API via requests"""
-        steam_url = API_URL.format(steam_api_interface, steam_api_method,
-                                   steam_api_version)
+        steam_url = '{}://{}/{}Service/{}/v{}'.format(
+            'https' if DEFAULT_PARAMS['https'] else 'http', DEFAULT_PARAMS['apihost'],
+            steam_api_interface, steam_api_method, steam_api_version)
 
         try:
             if steam_api_method == "GetPasswordRSAPublicKey":  # It's GET method
@@ -530,16 +529,9 @@ class MobileWebAuth(WebAuth):
         }
 
         try:
-            resp = self.session.post(
-                'https://api.steampowered.com/IMobileAuthService/GetWGToken/v0001',
-                data=data)
-        except requests.exceptions.RequestException as e:
-            raise HTTPError(str(e))
-
-        try:
-            resp_data = resp.json()['response']
+            resp = WebAuth.send_api_request(data, 'IMobileAuth', 'GetWGToken', 1)
         except json.decoder.JSONDecodeError as e:
-            if 'Please verify your <pre>key=</pre> parameter.' in resp.text:
+            if 'Please verify your key parameter.' in resp['response']:
                 raise LoginIncorrect('invalid token')
             else:
                 raise e
@@ -555,10 +547,10 @@ class MobileWebAuth(WebAuth):
                                      domain=domain)
             self.session.cookies.set('mobileClient', 'android', domain=domain)
             self.session.cookies.set('steamLogin',
-                                     str(steam_id) + "%7C%7C" + resp_data[
+                                     str(steam_id) + "%7C%7C" + resp['response'][
                                          'token'], domain=domain)
             self.session.cookies.set('steamLoginSecure',
-                                     str(steam_id) + "%7C%7C" + resp_data[
+                                     str(steam_id) + "%7C%7C" + resp['response'][
                                          'token_secure'],
                                      domain=domain, secure=True)
             self.session.cookies.set('Steam_Language', language, domain=domain)

@@ -31,30 +31,7 @@ All globals params (``key``, ``https``, ``format``, ``raw``) can be specified on
     }
 """
 import json as _json
-from steam.utils.web import make_requests_session as _make_session
-
-class APIHost:
-    """Enum of currently available API hosts."""
-    Public = 'api.steampowered.com'
-    """ available over HTTP (port 80) and HTTPS (port 443)"""
-    Partner = 'partner.steam-api.com'
-    """available over HTTPS (port 443) only
-
-    .. note::
-        Key is required for every request. If not supplied you will get HTTP 403.
-    """
-
-DEFAULT_PARAMS = {
-    # api parameters
-    'apihost': APIHost.Public,
-    'key': None,
-    'format': 'json',
-    # internal
-    'https': True,
-    'http_timeout': 30,
-    'raw': False,
-}
-
+from steam.utils.web import make_requests_session as _make_session, DEFAULT_PARAMS
 
 class WebAPI:
     """Steam WebAPI wrapper
