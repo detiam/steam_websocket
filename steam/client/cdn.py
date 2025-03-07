@@ -706,6 +706,13 @@ class CDNClient:
         :rtype: int
         """
 
+        # Workaround
+        if isinstance(manifest_gid, dict):
+            # For some depots, Steam has started returning a dict
+            # {"public": {"gid": GID, "size": ..., "download": ...}, ...}
+            # instead of a simple map {"public": GID, ...}
+            manifest_gid = manifest_gid['gid']
+
         body = {
             "app_id":      int(app_id),
             "depot_id":    int(depot_id),
@@ -746,6 +753,14 @@ class CDNClient:
         :returns: manifest instance
         :rtype: :class:`.CDNDepotManifest`
         """
+
+        # Workaround
+        if isinstance(manifest_gid, dict):
+            # For some depots, Steam has started returning a dict
+            # {"public": {"gid": GID, "size": ..., "download": ...}, ...}
+            # instead of a simple map {"public": GID, ...}
+            manifest_gid = manifest_gid['gid']
+
         if (app_id, depot_id, manifest_gid) not in self.manifests:
             if manifest_request_code:
                 resp = self.cdn_cmd('depot', f'{depot_id}/manifest/{manifest_gid}/5/{manifest_request_code}', app_id, depot_id)
@@ -840,14 +855,9 @@ class CDNClient:
         def async_fetch_manifest(
             app_id, depot_id, manifest_gid, decrypt, depot_name, branch_name, branch_pass
         ):
-            if isinstance(manifest_gid, dict):
-                # For some depots, Steam has started returning a dict
-                # {"public": {"gid": GID, "size": ..., "download": ...}, ...}
-                # instead of a simple map {"public": GID, ...}
-                manifest_gid = manifest_gid['gid']
             try:
                 manifest_code = self.get_manifest_request_code(
-                    app_id, depot_id, int(manifest_gid), branch_name, branch_pass
+                    app_id, depot_id, manifest_gid, branch_name, branch_pass
                 )
             except SteamError as exc:
                 return ManifestError("Failed to acquire manifest code", app_id, depot_id, manifest_gid, exc)
@@ -900,12 +910,6 @@ class CDNClient:
                     manifest_gid = depot_info.get('manifests', {}).get('public')
             else:
                 manifest_gid = depot_info.get('manifests', {}).get(branch)
-
-            if isinstance(manifest_gid, dict):
-                # For some depots, Steam has started returning a dict
-                # {"public": {"gid": GID, "size": ..., "download": ...}, ...}
-                # instead of a simple map {"public": GID, ...}
-                manifest_gid = manifest_gid['gid']
 
             if manifest_gid is not None:
                 tasks.append(
@@ -999,7 +1003,7 @@ class CDNClient:
             manifest_code = self.get_manifest_request_code(app_id, ws_app_id, int(wf.hcontent_file))
             manifest = self.get_manifest(app_id, ws_app_id, wf.hcontent_file, manifest_request_code=manifest_code)
         except SteamError as exc:
-            return ManifestError("Failed to acquire manifest", app_id, depot_id, manifest_gid, exc)
+            return ManifestError("Failed to acquire manifest", app_id, ws_app_id, wf.hcontent_file, exc)
 
         manifest.name = wf.title
         return manifest
