@@ -621,16 +621,24 @@ class CDNClient:
         :rtype: :class:`requests.Response`
         :raises SteamError: on error
         """
-        server = self.get_content_server()
-
         while True:
+            server = self.servers[0]
+            token = ''
+            result = self.get_cdn_auth_token(app_id, depot_id, str(server.host))
+            if result['eresult'] in (EResult.OK, EResult.Fail): # Fail means token unneeded seems
+                token = result['token']
+            else:
+                self.servers.rotate(-1)
+                self._LOG.warning(f'Server: {server}: get cdn auth token failed with {result["eresult"]}')
+                continue
+
             url = "{}://{}:{}/{}/{}{}".format(
                 'https' if server.https else 'http',
                 server.host,
                 server.port,
                 command,
                 args,
-                self.get_cdn_auth_token(app_id, depot_id, str(server.host))
+                token
                 )
 
             try:
@@ -645,7 +653,7 @@ class CDNClient:
                     raise SteamError("HTTP Error %s" % resp.status_code)
                 self.steam.sleep(0.5)
 
-            server = self.get_content_server(rotate=True)
+            self.servers.rotate(-1)
 
     def get_chunk(self, app_id, depot_id, chunk_id):
         """Download a single content chunk
