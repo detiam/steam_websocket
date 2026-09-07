@@ -98,6 +98,7 @@ from io import BytesIO
 from collections import OrderedDict, deque
 from binascii import crc32, unhexlify
 from datetime import datetime
+import time
 import logging
 import struct
 
@@ -528,7 +529,7 @@ class CDNClient:
             self.servers.rotate(-1)
         return self.servers[0]
 
-    def get_cdn_auth_token(self, app_id, depot_id, hostname):
+    def get_cdn_auth_token(self, app_id: int, depot_id: int, hostname: str) -> dict:
         """Get CDN authentication token
 
         :param app_id: app id
@@ -538,40 +539,50 @@ class CDNClient:
         :param hostname: cdn hostname
         :type  hostname: :class:`str`
         :return: CDN authentication token
-        :rtype: str
+        :rtype: dict
         """
+
+        if self.steam.logged_on is False:
+            return {
+                'eresult': EResult.NotLoggedOn,
+                'token': '',
+                'expiration_time': 0
+            }
+
+        key = f'{app_id}_{depot_id}_{hostname}'
         def update_cdn_auth_tokens():
-            resp = self.steam.send_um_and_wait('ContentServerDirectory.GetCDNAuthToken#1', {
-                'app_id': app_id,
-                'depot_id': depot_id,
-                'host_name': hostname
-            }, timeout=10)
+            try:
+                resp = self.steam.send_um_and_wait('ContentServerDirectory.GetCDNAuthToken#1', {
+                    'app_id': app_id,
+                    'depot_id': depot_id,
+                    'host_name': hostname
+                }, timeout=10)
 
-            if resp is None or resp.header.eresult != EResult.OK:
-                if resp.header.eresult == EResult.Fail:
-                    # no need authtoken?
-                    pass
+                if resp is None:
+                    self.cdn_auth_tokens.update({key: {
+                        'eresult': EResult.LimitExceeded,
+                        'token': '',
+                        'expiration_time': 0
+                    }})
                 else:
-                    raise SteamError(f"Failed to get CDNAuthToken for {app_id}, {depot_id}, {hostname}",
-                                     EResult.Timeout if resp is None else EResult(resp.header.eresult))
+                    self.cdn_auth_tokens.update({key: {
+                        'eresult': resp.header.eresult or EResult.Invalid,
+                        'token': resp.body.token or '',
+                        'expiration_time': resp.body.expiration_time or 0
+                    }})
+            except Exception as err:
+                raise SteamError(f"CDNAuthToken request error {err or ''}\n{resp or ''} for {key}")
 
-            self.cdn_auth_tokens.update({app_id:{depot_id:{hostname: {
-                'eresult': resp.header.eresult,
-                'token': resp.body.token or '',
-                'expiration_time': resp.body.expiration_time or 0
-            }}}})
 
-        if app_id not in self.cdn_auth_tokens or \
-           depot_id not in self.cdn_auth_tokens[app_id] or \
-           hostname not in self.cdn_auth_tokens[app_id][depot_id]:
-            update_cdn_auth_tokens()
-        else:
-            if self.cdn_auth_tokens[app_id][depot_id][hostname]['eresult'] != EResult.OK:
-                pass
-            elif datetime.fromtimestamp(self.cdn_auth_tokens[app_id][depot_id][hostname]['expiration_time'] - 60) < datetime.now():
+        result:dict = self.cdn_auth_tokens.get(key, {})
+        if result:
+            expiration_time = result.get('expiration_time', 0)
+            if expiration_time and expiration_time < time.time():
                 update_cdn_auth_tokens()
+        else:
+            update_cdn_auth_tokens()
 
-        return self.cdn_auth_tokens[app_id][depot_id][hostname]['token']
+        return self.cdn_auth_tokens[key]
 
     def get_depot_key(self, app_id, depot_id):
         """Get depot key, which is needed to decrypt files
