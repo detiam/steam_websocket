@@ -160,21 +160,7 @@ def get_content_servers_from_cs(cell_id, host='cs.steamcontent.com', port=80, nu
     if kv.get('deferred') == '1':
         return []
 
-    servers = []
-
-    for entry in kv['serverlist'].values():
-        server = ContentServer()
-        server.type = entry['type']
-        server.https = True if entry['https_support'] == 'mandatory' else False
-        server.host = entry['Host']
-        server.vhost = entry['vhost']
-        server.port = 443 if server.https else 80
-        server.cell_id = entry['cell']
-        server.load = entry['load']
-        server.weighted_load = entry['weightedload']
-        servers.append(server)
-
-    return servers
+    return resp['response']['servers']
 
 
 def get_content_servers_from_webapi(cell_id, num_servers=20):
@@ -190,42 +176,7 @@ def get_content_servers_from_webapi(cell_id, num_servers=20):
     params = {'cell_id': cell_id, 'max_servers': num_servers}
     resp = webapi.get('IContentServerDirectoryService', 'GetServersForSteamPipe', params=params)
 
-    servers = []
-
-    for entry in resp['response']['servers']:
-        server = ContentServer()
-        server.type = entry['type']
-        server.https = True if entry['https_support'] == 'mandatory' else False
-        server.host = entry['host']
-        server.vhost = entry['vhost']
-        server.port = 443 if server.https else 80
-        server.cell_id = entry.get('cell_id', 0)
-        server.load = entry['load']
-        server.weighted_load = entry['weighted_load']
-        servers.append(server)
-
-    return servers
-
-
-class ContentServer:
-    https = False
-    host = None
-    vhost = None
-    port = None
-    type = None
-    cell_id = 0
-    load = None
-    weighted_load = None
-
-    def __repr__(self):
-        return "<{}('{}://{}:{}', type={}, cell_id={})>".format(
-            self.__class__.__name__,
-            'https' if self.https else 'http',
-            self.host,
-            self.port,
-            repr(self.type),
-            repr(self.cell_id),
-            )
+    return resp['response']['servers']
 
 
 class CDNDepotFile(DepotFile):
@@ -502,18 +453,22 @@ class CDNClient:
             self.licensed_app_ids.update(info['appids'].values())
             self.licensed_depot_ids.update(info['depotids'].values())
 
-    def fetch_content_servers(self, num_servers=20):
+    def fetch_content_servers(self, num_servers=20, clear=True):
         """Update CS server list
 
         :param num_servers: numbers of CS server to fetch
         :type  num_servers: int
+        :param clear: clear existing server list
+        :type  clear: bool
         """
-        self.servers.clear()
+        if clear:
+            self.servers.clear()
 
         self._LOG.debug("Trying to fetch content servers from Steam API")
 
-        servers = get_content_servers_from_webapi(self.cell_id)
-        servers = filter(lambda server: server.type != 'OpenCache', servers) # see #264
+        content_servers = get_content_servers_from_webapi(self.cell_id, num_servers)
+        content_servers.sort(key=lambda x: (x['type'] != 'CDN', x['priority_class']))
+        servers = filter(lambda x: not (x.get('steam_china_only', False) or x['type'] == 'OpenCache'), content_servers) # see #264
         self.servers.extend(servers)
 
         if not self.servers:
