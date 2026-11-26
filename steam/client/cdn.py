@@ -215,6 +215,8 @@ class ContentServer:
     cell_id = 0
     load = None
     weighted_load = None
+    token = None
+    token_expiration_time = 0
 
     def __repr__(self):
         return "<{}('{}://{}:{}', type={}, cell_id={})>".format(
@@ -463,7 +465,6 @@ class CDNClient:
             self.cell_id = self.steam.cell_id
 
         self.web = make_requests_session()
-        self.cdn_auth_tokens = {}        #: CDN authentication token
         self.depot_keys = {}             #: depot decryption keys
         self.manifests = {}              #: CDNDepotManifest instances
         self.app_depots = {}             #: app depot info
@@ -528,53 +529,42 @@ class CDNClient:
             self.servers.rotate(-1)
         return self.servers[0]
 
-    def get_cdn_auth_token(self, app_id, depot_id, hostname):
+    def get_cdn_auth_token(self, depot_id:int, hostname:str, app_id:int|None=None):
         """Get CDN authentication token
 
-        :param app_id: app id
-        :type  app_id: :class:`int`
         :param depot_id: depot id
-        :type  depot_id: :class:`int`
+        :type  depot_id: int
         :param hostname: cdn hostname
-        :type  hostname: :class:`str`
-        :return: CDN authentication token
-        :rtype: dict
+        :type  hostname: str
+        :param app_id: (optional) app id
+        :type  app_id: int
+        :return: `CContentServerDirectory_GetCDNAuthToken_Response` .token and .expiration_time fields
+        :rtype: proto message
+        :raises: :class:`SteamError`
         """
+        params = {
+            'depot_id': depot_id,
+            'host_name': hostname,
+        }
+        if app_id is not None:
+            params['app_id'] = app_id
 
-        key = f'{app_id}_{depot_id}_{hostname}'
-        def update_cdn_auth_tokens():
-            try:
-                resp = self.steam.send_um_and_wait('ContentServerDirectory.GetCDNAuthToken#1', {
-                    'app_id': app_id,
-                    'depot_id': depot_id,
-                    'host_name': hostname
-                }, timeout=10)
+        resp = self.steam.send_um_and_wait('ContentServerDirectory.GetCDNAuthToken#1', params, timeout=5)
 
-                if resp is None:
-                    self.cdn_auth_tokens.update({key: {
-                        'eresult': EResult.LimitExceeded,
-                        'token': '',
-                        'expiration_time': 0
-                    }})
-                else:
-                    self.cdn_auth_tokens.update({key: {
-                        'eresult': resp.header.eresult or EResult.Invalid,
-                        'token': resp.body.token or '',
-                        'expiration_time': resp.body.expiration_time or 0
-                    }})
-            except Exception as err:
-                raise SteamError(f"CDNAuthToken request error {err or ''}\n{resp or ''} for {key}")
+        if resp is None:
+            raise SteamError(
+                f"Failed to get CDN authentication token: request timed out for {app_id}, {depot_id}, {hostname}",
+                EResult.Timeout
+            )
 
+        if resp.header.eresult != EResult.OK:
+            raise SteamError(
+                f"Failed to get CDN authentication token: "
+                f"{resp.header.error_message} for {app_id}, {depot_id}, {hostname}",
+                EResult(resp.header.eresult)
+            )
 
-        result:dict = self.cdn_auth_tokens.get(key, {})
-        if result:
-            expiration_time = result.get('expiration_time', 0)
-            if expiration_time and expiration_time < time.time():
-                update_cdn_auth_tokens()
-        else:
-            update_cdn_auth_tokens()
-
-        return self.cdn_auth_tokens[key]
+        return resp.body
 
     def get_depot_key(self, app_id, depot_id):
         """Get depot key, which is needed to decrypt files
@@ -598,22 +588,33 @@ class CDNClient:
 
         return self.depot_keys[depot_id]
 
-    def cdn_cmd(self, command, args, app_id=None, depot_id=None):
+    def cdn_cmd(self, command, args, app_id:int|None=None, depot_id:int|None=None):
         """Run CDN command request
 
         :param command: command name
         :type  command: str
         :param args: args
         :type  args: str
-        :param args: app_id: (optional) required for CDN authentication token
-        :type  args: int
-        :param args: depot_id: (optional) required for CDN authentication token
-        :type  args: int
+        :param app_id: (optional) required for CDN authentication token
+        :type  int
+        :param depot_id: (optional) required for CDN authentication token
+        :type  int
         :returns: requests response
         :rtype: :class:`requests.Response`
         :raises SteamError: on error
         """
-        server = self.get_content_server()
+        server:ContentServer = self.get_content_server()
+        try:
+            if server.type == 'CDN' and (server.token is None or (server.token_expiration_time - 30) <= time.time()):
+                resp_body = self.get_cdn_auth_token(depot_id, server.host, app_id)
+                server.token = resp_body.token
+                server.token_expiration_time = resp_body.expiration_time
+        except SteamError as e:
+            if e.eresult == EResult.Fail: # mean no token needed seems
+                server.token = ''
+                server.token_expiration_time = 0
+            else:
+                raise e
 
         while True:
             url = "{}://{}:{}/{}/{}{}".format(
@@ -622,7 +623,7 @@ class CDNClient:
                 server.port,
                 command,
                 args,
-                self.get_cdn_auth_token(app_id, depot_id, str(server.host))['token']
+                server.token
                 )
 
             try:
